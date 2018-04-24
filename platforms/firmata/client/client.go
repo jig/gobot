@@ -38,6 +38,7 @@ const (
 	PinMode                  byte = 0xF4
 	StartSysex               byte = 0xF0
 	EndSysex                 byte = 0xF7
+	EncoderData              byte = 0x61
 	CapabilityQuery          byte = 0x6B
 	CapabilityResponse       byte = 0x6C
 	PinStateQuery            byte = 0x6D
@@ -351,6 +352,25 @@ func (b *Client) togglePinReporting(pin int, state int, mode byte) (err error) {
 	return
 }
 
+// https://github.com/firmata/protocol/blob/master/encoder.md
+const (
+	EncoderAttach          byte = 0x00
+	EncoderReportPosition  byte = 0x01
+	EncoderReportPositions byte = 0x02
+	EncoderResetPosition   byte = 0x03
+)
+
+func (b *Client) EncoderAttach(encoderID int, pinA int, pinB int) (err error) {
+	if encoderID > 5 || encoderID < 0 {
+		return fmt.Errorf("Encoder: encoderID > 5 || encoderID < 0")
+	}
+	return b.WriteSysex([]byte{EncoderData, EncoderAttach, byte(encoderID), byte(pinA & 0xFF), byte(pinB & 0xFF)})
+}
+
+func (b *Client) EncoderReportPosition(encoderID int) (err error) {
+	return b.WriteSysex([]byte{EncoderData, EncoderReportPosition, byte(encoderID)})
+}
+
 // WriteSysex writes an arbitrary Sysex command to the microcontroller.
 func (b *Client) WriteSysex(data []byte) (err error) {
 	return b.write(append([]byte{StartSysex}, append(data, EndSysex)...))
@@ -521,6 +541,25 @@ func (b *Client) process() (err error) {
 		case StringData:
 			str := currentBuffer[2:]
 			b.Publish(b.Event("StringData"), string(str[:len(str)-1]))
+		case EncoderData:
+			/*
+			 * 2 Encoder #  &  DIRECTION    [= (direction << 6) | (#)]
+			 * 3 current position, bits 0-6
+			 * 4 current position, bits 7-13
+			 * 5 current position, bits 14-20
+			 * 6 current position, bits 21-27
+			 */
+			if len(currentBuffer) < 8 {
+				fmt.Println(currentBuffer)
+			} else {
+				encoderID := currentBuffer[2] & 0x3F
+				direction := (currentBuffer[2] & 0x40) >> 6
+				position := int32(currentBuffer[3]&0x3f) |
+					(int32(currentBuffer[4]&0x3f) << 7) |
+					(int32(currentBuffer[5]&0x3f) << 14) |
+					(int32(currentBuffer[6]&0x3f) << 21)
+				fmt.Printf("E:%d D:%d POS:%d   \r", encoderID, direction, position)
+			}
 		default:
 			data := make([]byte, len(currentBuffer))
 			copy(data, currentBuffer)
